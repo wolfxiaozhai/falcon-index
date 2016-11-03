@@ -2,8 +2,8 @@ package main
 
 import "testing"
 import "fmt"
-import "github.com/laiwei/falcon-index/g"
-import "github.com/laiwei/falcon-index/index"
+import "falcon-index/g"
+import "falcon-index/index"
 
 func init() {
 	g.OpenDB()
@@ -17,7 +17,7 @@ func BenchmarkQueryDocByTerm(b *testing.B) {
 
 func BenchmarkQueryDocByTerms(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		index.QueryDocByTerms([]string{"home=bj", "metric=cpu.idle"}, nil, 5)
+		index.QueryDocByTerms([]string{"home=qd", "metric=cpu.idle"}, nil, 5)
 	}
 }
 
@@ -55,7 +55,7 @@ func TestQueryDocByTerms(t *testing.T) {
 }
 
 func TestQueryFieldByTerm(t *testing.T) {
-	rt, err := index.QueryFieldByTerm("home=bj")
+	rt, err := index.QueryFieldByTerm("home=qd")
 	fmt.Printf("%s, %v\n", rt, err)
 }
 

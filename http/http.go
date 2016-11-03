@@ -5,7 +5,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/gin-gonic/gin"
-	"github.com/laiwei/falcon-index/g"
+	"falcon-index/g"
 )
 
 var router *gin.Engine
@@ -14,6 +14,7 @@ func init() {
 	router = gin.Default()
 	//gin.SetMode(gin.ReleaseMode)
 	configApiQueryRoutes()
+	configApiInsertRoutes()
 }
 
 func Start() {

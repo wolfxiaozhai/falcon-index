@@ -6,35 +6,75 @@ import (
 	"fmt"
 	"github.com/boltdb/bolt"
 	"github.com/golang/protobuf/proto"
-	"github.com/laiwei/falcon-index/doc"
-	"github.com/laiwei/falcon-index/g"
+	"falcon-index/doc"
+	"falcon-index/g"
 	cmodel "github.com/open-falcon/common/model"
 	cutils "github.com/open-falcon/common/utils"
 	"github.com/toolkits/file"
 	"log"
+	"strings"
+	"sort"
 )
 
+
+func SortedTags(tag_string string) string {
+	if tag_string == "" {
+		return ""
+	}
+	tag_list := strings.Split(tag_string, ",")
+	size := len(tag_list)
+	tags := make(map[string]string, size)
+	for _, v := range(tag_list){
+		k_v := strings.Split(v, "=")
+		if len(k_v) == 2{
+			tags[k_v[0]] = k_v[1]
+		}
+	}
+	if size == 0 {
+		return ""
+	}
+
+	if size == 1 {
+		for k, v := range tags {
+			return fmt.Sprintf("%s=%s", k, v)
+		}
+	}
+
+	keys := make([]string, size)
+	i := 0
+	for k := range tags {
+		keys[i] = k
+		i++
+	}
+
+	sort.Strings(keys)
+
+	ret := make([]string, size)
+	for j, key := range keys {
+		ret[j] = fmt.Sprintf("%s=%s", key, tags[key])
+	}
+
+	return strings.Join(ret, ",")
+}
+
+
 // each term as a bucket, for seek speedup, and save doc together
-func BuildIndex() {
-	sz_bname := []byte(g.SIZE_BUCKET)
-	field_bname := []byte(g.FIELDS_BUCKET)
-	tf_bname := []byte(g.TERM_FIELDS_BUCKET)
+func HttpBuildIndex(content string) error {
+	reason := fmt.Errorf("no error")
+	endpoint_bname := []byte(g.ENDPOINT_NAME_BUCKET)
+	metric_bname := []byte(g.METRIC_NAME_BUCKET)
 	g.KVDB.Update(func(tx *bolt.Tx) error {
-		tx.CreateBucketIfNotExists(sz_bname)
-		tx.CreateBucketIfNotExists(field_bname)
-		tx.CreateBucketIfNotExists(tf_bname)
+		tx.CreateBucketIfNotExists(endpoint_bname)
+		tx.CreateBucketIfNotExists(metric_bname)
 		return nil
 	})
 
-	testContent, err := file.ToTrimString("./test-metadata.json")
-	if err != nil {
-		log.Fatalln("read test data file error:", err.Error())
-	}
-
+	testContent := content
 	var data []*cmodel.JsonMetaData
-	err = json.Unmarshal([]byte(testContent), &data)
+	err := json.Unmarshal([]byte(testContent), &data)
 	if err != nil {
-		log.Fatalln("parse test file error:", err.Error())
+		reason = fmt.Errorf("parse test file error:%s", err.Error())
+		return reason
 	}
 
 	for _, jmd := range data {
@@ -46,6 +86,7 @@ func BuildIndex() {
 			Tags:        []*doc.Pair{},
 		}
 		tags := cutils.DictedTagstring(jmd.Tags)
+		sortedTags := cutils.SortedTags(tags)
 		for tagk, tagv := range tags {
 			p := &doc.Pair{
 				Key:   proto.String(tagk),
@@ -54,96 +95,137 @@ func BuildIndex() {
 			d.Tags = append(d.Tags, p)
 		}
 		log.Printf("doc:%v\n", d)
-
-		doc_id := cutils.Checksum(d.GetEndpoint(), d.GetMetric(), tags)
 		doc_bytes, err := d.Marshal()
-		if err != nil {
-			log.Fatalln("marshal doc:%s", err)
-		}
+        if err != nil {
+            return fmt.Errorf("marshal doc:%s", err)
+        }
 
 		g.KVDB.Update(func(tx *bolt.Tx) error {
-			tags_ := tags
-			tags_["metric"] = d.GetMetric()
-			tags_["endpoint"] = d.GetEndpoint()
 
-			sz_bucket := tx.Bucket(sz_bname)
-			tf_bucket := tx.Bucket(tf_bname)
+			tmp_metric := d.GetMetric()
+			mb := tx.Bucket([]byte(metric_bname))
+			if mb == nil {
+				return fmt.Errorf("no such bucket:%s", metric_bname)
+			}
+			mb.Put([]byte(tmp_metric), []byte(""))
+
+			tmp_endpoint_name := d.GetEndpoint()
+			eb := tx.Bucket([]byte(endpoint_bname))
+			if eb == nil {
+				return fmt.Errorf("no such bucket:%s", endpoint_bname)
+			}
+			eb.Put([]byte(tmp_endpoint_name), []byte(""))
+
+			//bucket name is endpoint_name, key为metric/sortedTags, value为[]byte""
+			endpoint_bucket, err:= tx.CreateBucketIfNotExists([]byte(tmp_endpoint_name))
+			if err != nil {
+				return fmt.Errorf("create endpint_bucket: %s", err)
+			}
+			counter := tmp_metric + "/" + sortedTags
+			endpoint_bucket.Put([]byte(counter), doc_bytes)
+
 			var buf bytes.Buffer
-			for k, v := range tags_ {
+			for k, v := range tags {
 				buf.Reset()
 				buf.WriteString(k)
 				buf.WriteString("=")
 				buf.WriteString(v)
 				term := buf.Bytes()
 
-				//term_bucket, _ => [doc_id:doc, doc_id:doc...]
-				term_bname := append([]byte(g.TERM_DOCS_BUCKET_PREFIX), term...)
-				term_bucket, err := tx.CreateBucketIfNotExists(term_bname)
+				tag_bucket, err := tx.CreateBucketIfNotExists(term)
 				if err != nil {
-					return fmt.Errorf("create-term-bucket:%s", err)
+					return fmt.Errorf("create tag bucket:%s", err)
 				}
-				term_bucket.Put([]byte(doc_id), doc_bytes)
-
-				//size_bucket, _ => [term1:size, term2:size]
-				sz := sz_bucket.Get(term)
-				if sz == nil || len(sz) == 0 {
-					sz_bucket.Put(term, g.Int64ToBytes(1))
-				} else {
-					new_sz := g.BytesToInt64(sz) + 1
-					sz_bucket.Put(term, g.Int64ToBytes(new_sz))
-				}
-
-				//fields_bucket,  _ => [field1:"", field2:"", field3:""]
-				f_bucket := tx.Bucket(field_bname)
-				f_bucket.Put([]byte(k), []byte(""))
-
-				//field_value_bucket, field => [value1:"", value2:"", value3:""]
-				fv_bname := g.FVALUE_BUCKET_PREFIX + k
-				fv_bucket, _ := tx.CreateBucketIfNotExists([]byte(fv_bname))
-				fv_bucket.Put([]byte(v), []byte(""))
-
-				//term_fileds, _ => [term0x00field, term0x00field, ]
-				for f, _ := range tags {
-					buf.Reset()
-					buf.Write(term)
-					buf.WriteByte(30)
-					buf.WriteString(f)
-					tf_bucket.Put(buf.Bytes(), []byte(""))
-				}
+				tag_bucket.Put([]byte(tmp_endpoint_name), []byte(""))
 			}
-
-			//secondary index with metric, used for query docs by terms
-			metric_v := tags_["metric"]
-			delete(tags, "metric")
-			for k, v := range tags_ {
-				buf.Reset()
-				buf.WriteString("metric=")
-				buf.WriteString(metric_v)
-				buf.WriteString(",")
-				buf.WriteString(k)
-				buf.WriteString("=")
-				buf.WriteString(v)
-				term := buf.Bytes()
-
-				//term_bucket, _ => [doc_id:doc, doc_id:doc...]
-				term_bname := append([]byte(g.TERM_DOCS_BUCKET_PREFIX), term...)
-				term_bucket, err := tx.CreateBucketIfNotExists(term_bname)
-				if err != nil {
-					return fmt.Errorf("create-term-bucket:%s", err)
-				}
-				term_bucket.Put([]byte(doc_id), doc_bytes)
-
-				//size_bucket, _ => [term1:size, term2:size]
-				sz := sz_bucket.Get(term)
-				if sz == nil || len(sz) == 0 {
-					sz_bucket.Put(term, g.Int64ToBytes(1))
-				} else {
-					new_sz := g.BytesToInt64(sz) + 1
-					sz_bucket.Put(term, g.Int64ToBytes(new_sz))
-				}
-			}
-
 			return nil
 		})
 	}
+	return reason
 }
+
+func BuildIndex() {
+	endpoint_bname := []byte(g.ENDPOINT_NAME_BUCKET)
+	metric_bname := []byte(g.METRIC_NAME_BUCKET)
+	g.KVDB.Update(func(tx *bolt.Tx) error {
+		tx.CreateBucketIfNotExists(endpoint_bname)
+		tx.CreateBucketIfNotExists(metric_bname)
+		return nil
+	})
+
+	testContent, err := file.ToTrimString("./test-metadata.json")
+	if err != nil {
+		log.Fatalln("read test data file error:", err.Error())
+	}
+	var data []*cmodel.JsonMetaData
+	err = json.Unmarshal([]byte(testContent), &data)
+	if err != nil {
+		log.Fatalln("parse test file error:", err.Error())
+	}
+	for _, jmd := range data {
+		d := &doc.MetaDoc{
+			Endpoint:    proto.String(jmd.Endpoint),
+			Metric:      proto.String(jmd.Metric),
+			CounterType: proto.String(jmd.CounterType),
+			Step:        proto.Int64(jmd.Step),
+			Tags:        []*doc.Pair{},
+		}
+		tags := cutils.DictedTagstring(jmd.Tags)
+		sortedTags := cutils.SortedTags(tags)
+		for tagk, tagv := range tags {
+			p := &doc.Pair{
+				Key:   proto.String(tagk),
+				Value: proto.String(tagv),
+			}
+			d.Tags = append(d.Tags, p)
+		}
+		log.Printf("doc:%v\n", d)
+		doc_bytes, err := d.Marshal()
+        if err != nil {
+            log.Fatalln("marshal doc:%s", err.Error())
+        }
+
+		g.KVDB.Update(func(tx *bolt.Tx) error {
+
+			tmp_metric := d.GetMetric()
+			mb := tx.Bucket([]byte(metric_bname))
+			if mb == nil {
+				return fmt.Errorf("no such bucket:%s", metric_bname)
+			}
+			mb.Put([]byte(tmp_metric), []byte(""))
+
+			tmp_endpoint_name := d.GetEndpoint()
+			eb := tx.Bucket([]byte(endpoint_bname))
+			if eb == nil {
+				return fmt.Errorf("no such bucket:%s", endpoint_bname)
+			}
+			eb.Put([]byte(tmp_endpoint_name), []byte(""))
+
+			//bucket name is endpoint_name, key为metric/sortedTags, value为[]byte""
+			endpoint_bucket, err:= tx.CreateBucketIfNotExists([]byte(tmp_endpoint_name))
+			if err != nil {
+				return fmt.Errorf("create endpint_bucket: %s", err)
+			}
+			counter := tmp_metric + "/" + sortedTags
+			endpoint_bucket.Put([]byte(counter), doc_bytes)
+
+			var buf bytes.Buffer
+			for k, v := range tags {
+				buf.Reset()
+				buf.WriteString(k)
+				buf.WriteString("=")
+				buf.WriteString(v)
+				term := buf.Bytes()
+
+				tag_bucket, err := tx.CreateBucketIfNotExists(term)
+				if err != nil {
+					return fmt.Errorf("create tag bucket:%s", err)
+				}
+				tag_bucket.Put([]byte(tmp_endpoint_name), []byte(""))
+			}
+			return nil
+		})
+	
+	}
+}
+

@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/laiwei/falcon-index/g"
-	"github.com/laiwei/falcon-index/http"
-	"github.com/laiwei/falcon-index/index"
+	"falcon-index/g"
+	"falcon-index/http"
+	"falcon-index/index"
 )
 
 func start_signal(pid int, cfg *g.GlobalConfig) {

@@ -3,7 +3,7 @@ package http
 import (
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/laiwei/falcon-index/index"
+	"falcon-index/index"
 	"strconv"
 	"strings"
 )
@@ -112,6 +112,69 @@ func configApiQueryRoutes() {
 			limit = 10
 		}
 		rt, err := index.QueryDocByTerm(t, []byte(start), limit)
+		if err != nil {
+			c.JSON(500, gin.H{"msg": err.Error()})
+		} else {
+			c.JSON(200, gin.H{
+				"value": rt,
+			})
+		}
+	})
+
+	router.GET("/api/fuzz/endpoint/:p/:search_flag", func(c *gin.Context) {
+		pattern := c.Param("p")
+		search_flag, err := strconv.Atoi(c.Param("search_flag"))
+		if err != nil {
+			search_flag = 1
+		}
+		rt, err := index.FuzzQueryEndpoint(pattern, search_flag)
+		if err != nil {
+			c.JSON(500, gin.H{"msg": err.Error()})
+		} else {
+			c.JSON(200, gin.H{
+				"value": rt,
+			})
+		}
+	})
+
+	router.GET("/api/fuzz/metric/:p/:search_flag", func(c *gin.Context) {
+		pattern := c.Param("p")
+		search_flag, err := strconv.Atoi(c.Param("search_flag"))
+		if err != nil {
+			search_flag = 1
+		}
+		rt, err := index.FuzzQueryMetric(pattern, search_flag)
+		if err != nil {
+			c.JSON(500, gin.H{"msg": err.Error()})
+		} else {
+			c.JSON(200, gin.H{
+				"value": rt,
+			})
+		}
+	})
+
+	router.GET("/api/fuzz/counter/:endpoint_name/:patterns/:limit", func(c *gin.Context) {
+		endpoint_name := c.Param("endpoint_name")
+		patterns := c.Param("patterns")
+		pattern_list := strings.Split(patterns, ",")
+		limit, err := strconv.Atoi(c.Param("limit"))
+		if err != nil {
+			limit = 100
+		}
+		rt, err := index.FuzzQueryEndpointMetric(endpoint_name, pattern_list, limit)
+		if err != nil {
+			c.JSON(500, gin.H{"msg": err.Error()})
+		} else {
+			c.JSON(200, gin.H{
+				"value": rt,
+			})
+		}
+	})
+
+	router.GET("/api/tags/endpoint/:tags", func(c *gin.Context) {
+		tags := c.Param("tags")
+		k_vs := strings.Split(tags, ",")
+		rt, err := index.QueryTagsEndpoint(k_vs)
 		if err != nil {
 			c.JSON(500, gin.H{"msg": err.Error()})
 		} else {

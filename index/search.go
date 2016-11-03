@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/boltdb/bolt"
-	"github.com/laiwei/falcon-index/doc"
-	"github.com/laiwei/falcon-index/g"
+	"falcon-index/doc"
+	"falcon-index/g"
 	"log"
 	"strings"
+	"regexp"
 )
 
 type Offset struct {
@@ -367,4 +368,167 @@ func QueryFieldValueByTerms(terms []string, start *Offset, limit int, f, q strin
 	}
 END:
 	return rt, rt_offset, nil
+}
+
+func FuzzQueryEndpoint(pattern string, search_flag int) ([]string, error) {
+	rt := make([]string, 0)
+	err := g.KVDB.View(func(tx *bolt.Tx) error {
+		sb := tx.Bucket([]byte(g.ENDPOINT_NAME_BUCKET))
+		if sb == nil {
+			return fmt.Errorf("no such bucket:%s", g.ENDPOINT_NAME_BUCKET)
+		}
+		c := sb.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			endpoint_name := string(k)
+			switch search_flag{
+			case 0:
+				if strings.HasPrefix(endpoint_name, pattern){
+					rt = append(rt, endpoint_name)
+				}
+			case 1:
+				if strings.Contains(endpoint_name, pattern){
+					rt = append(rt, endpoint_name)
+				}
+			case 2:
+				if strings.HasSuffix(endpoint_name, pattern){
+					rt = append(rt, endpoint_name)
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return []string{}, err
+	}
+
+	return rt, nil
+}
+
+func FuzzQueryMetric(pattern string, search_flag int) ([]string, error) {
+	rt := make([]string, 0)
+	err := g.KVDB.View(func(tx *bolt.Tx) error {
+		sb := tx.Bucket([]byte(g.METRIC_NAME_BUCKET))
+		if sb == nil {
+			return fmt.Errorf("no such bucket:%s", g.METRIC_NAME_BUCKET)
+		}
+		c := sb.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			metric := string(k)
+			switch search_flag{
+			case 0:
+				if strings.HasPrefix(metric, pattern){
+					rt = append(rt, metric)
+				}
+			case 1:
+				if strings.Contains(metric, pattern){
+					rt = append(rt, metric)
+				}
+			case 2:
+				if strings.HasSuffix(metric, pattern){
+					rt = append(rt, metric)
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return []string{}, err
+	}
+
+	return rt, nil
+}
+
+func FuzzQueryEndpointMetric(endpoint_name string, patterns []string, limit int) ([]*doc.Doc, error) {
+	rt := make([]*doc.Doc, 0)
+	pattern := ".*"
+	for _, p := range(patterns){
+		pattern += p+".*"
+	}
+	fmt.Println(pattern)
+	mode := regexp.MustCompile(pattern)
+	err := g.KVDB.View(func(tx *bolt.Tx) error {
+		eb := tx.Bucket([]byte(endpoint_name))
+		if eb == nil {
+			return fmt.Errorf("no such bucket:%s", endpoint_name)
+		}
+		c := eb.Cursor()
+		for k, val := c.First(); k != nil && len(rt)<limit; k, val = c.Next() {
+			counter := string(k)
+			mdoc := &doc.MetaDoc{}
+			err := mdoc.Unmarshal(val)
+			if err != nil {
+				log.Printf("decode doc:%s fail:%s", val, err)
+				continue
+			}
+			doc_ := &doc.Doc{
+				ID:      counter,
+				MetaDoc: mdoc,
+			}
+			if mode.Match(k){
+				rt = append(rt, doc_)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return []*doc.Doc{}, err
+	}
+
+	return rt, nil
+}
+
+func QueryTagsEndpoint(tags []string) ([]string, error) {
+	rt := make([]string, 0)
+	err := g.KVDB.View(func(tx *bolt.Tx) error {
+		for _, tag := range(tags){
+			tb := tx.Bucket([]byte(tag))
+			if tb == nil {
+				return fmt.Errorf("no such bucket:%s", tag)
+			}
+		}
+		intersection_map := make(map[string]int,0)
+		tags_len := len(tags)
+		if tags_len > 0{
+			tb := tx.Bucket([]byte(tags[0]))
+			if tb == nil {
+				return fmt.Errorf("no such bucket:%s", tags[0])
+			}
+			c := tb.Cursor()
+			for k, _ := c.First(); k != nil; k, _ = c.Next() {
+					endpoint_name := string(k)
+					intersection_map[endpoint_name] = 1
+				}
+		}
+		for index, tag := range(tags){
+			if index == 0 {
+				continue
+			}
+			tb := tx.Bucket([]byte(tag))
+			if tb == nil {
+				return fmt.Errorf("no such bucket:%s", tag)
+			}
+			c := tb.Cursor()
+			for k, _ := c.First(); k != nil; k, _ = c.Next() {
+				endpoint_name := string(k)
+				if intersection_map[endpoint_name] == index {
+					intersection_map[endpoint_name] += 1
+				}
+			}
+		}
+		for k, v := range(intersection_map){
+			if v == tags_len{
+				rt = append(rt, k)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return []string{}, err
+	}
+
+	return rt, nil
 }
