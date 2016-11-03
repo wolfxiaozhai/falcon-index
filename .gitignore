@@ -39,6 +39,7 @@ _testmain.go
 /test/*.go
 /test/build
 
+test-metadata.json
 tmp
 cfg.json
 gitversion

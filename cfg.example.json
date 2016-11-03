@@ -1,0 +1,8 @@
+{
+    "pid": "",
+	"debug": true,
+	"http": {
+		"enabled": true,
+		"listen": ":8000"
+	}
+}
